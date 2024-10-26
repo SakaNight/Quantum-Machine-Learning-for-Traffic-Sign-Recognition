@@ -24,16 +24,6 @@ class ImageDataset(Dataset):
     def __getitem__(self, idx):
         return self.images[idx], self.labels[idx]
 
-# def preprocess_image(image_path: str, size: tuple = (4, 3)) -> np.ndarray:
-#     try:
-#         image = Image.open(image_path).convert('L')  # 转为灰度图像
-#         image = image.resize(size)
-#         normalized = np.array(image) / 255.0  # 归一化到 [0, 1]
-#         flattened = normalized.flatten()
-#         return flattened
-#     except Exception as e:
-#         raise Exception(f"Error preprocessing image {image_path}: {str(e)}")
-
 def preprocess_image(image_path: str, size: tuple = (32, 32)) -> np.ndarray:
     try:
         image = Image.open(image_path)
@@ -113,9 +103,14 @@ class HybridNet(nn.Module):
     def forward(self, x):
         return self.classical_layers(x)
 
-def train_model(model, train_loader, val_loader, criterion, optimizer, num_epochs=10, device='cpu'):
+def train_model(model, train_loader, val_loader, criterion, optimizer, num_epochs=10, device='cpu', start_epoch=0):
     best_val_acc = 0.0
-    for epoch in range(num_epochs):
+
+    # 如果存在之前的训练状态，加载最佳验证准确率
+    if os.path.exists('best_val_acc.pth'):
+        best_val_acc = torch.load('best_val_acc.pth')
+
+    for epoch in range(start_epoch, num_epochs):
         # Training phase
         model.train()
         running_loss = 0.0
@@ -156,8 +151,19 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, num_epoch
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            torch.save(model.state_dict(), 'best_hybrid_model.pth')
+            # 保存最佳模型权重和最佳验证准确率
+            torch.save(model.state_dict(), 'best_model.pth')
+            torch.save(best_val_acc, 'best_val_acc.pth')
             print(f'Best model saved with accuracy: {best_val_acc:.2f}%')
+
+        # 保存当前的模型和优化器状态
+        checkpoint = {
+            'epoch': epoch + 1,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'best_val_acc': best_val_acc
+        }
+        torch.save(checkpoint, 'checkpoint.pth')
 
     return model
 
@@ -195,16 +201,29 @@ def main():
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
+    # 加载预训练模型（如果存在）
+    start_epoch = 0
+    if os.path.exists('checkpoint.pth'):
+        checkpoint = torch.load('checkpoint.pth', map_location=device)
+        if 'model_state_dict' in checkpoint and 'optimizer_state_dict' in checkpoint:
+            model.load_state_dict(checkpoint['model_state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            start_epoch = checkpoint['epoch']
+            print(f"Resuming training from epoch {start_epoch}")
+        else:
+            print("Checkpoint file does not contain expected keys. Starting training from scratch.")
+            start_epoch = 0
+
     # Train model
     print("Training model...")
     model = train_model(
         model, train_loader, val_loader, criterion, optimizer,
-        num_epochs=num_epochs, device=device
+        num_epochs=num_epochs, device=device, start_epoch=start_epoch
     )
 
     # 加载最佳模型权重
-    if os.path.exists('best_hybrid_model.pth'):
-        model.load_state_dict(torch.load('best_hybrid_model.pth', map_location=device))
+    if os.path.exists('best_model.pth'):
+        model.load_state_dict(torch.load('best_model.pth', map_location=device))
         print("Best model weights loaded.")
 
     # Evaluate on test set
