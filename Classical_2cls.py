@@ -108,10 +108,10 @@ def main():
 
     print("Processing data...")
     train_features = [preprocess_image(path) for path in tqdm(train_df['Path'])]
-    train_labels = train_df['ClassId'].values
+    train_labels = train_df['ClassId'].values - 1
 
     test_features = [preprocess_image(path) for path in tqdm(test_df['Path'])]
-    test_labels = test_df['ClassId'].values
+    test_labels = test_df['ClassId'].values - 1
 
     x_train, x_val, y_train, y_val = train_test_split(
         train_features, train_labels, test_size=0.2, random_state=42
@@ -124,7 +124,7 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4)
     val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=4)
 
-    model = ClassicalCNN(input_size=32*32*3, num_classes=43).to(device)
+    model = ClassicalCNN(input_size=32*32*3, num_classes=2).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
