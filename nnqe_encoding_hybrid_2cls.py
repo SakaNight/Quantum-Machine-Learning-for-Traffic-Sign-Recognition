@@ -1,8 +1,6 @@
-# /opt/anaconda3/bin/python Hybrid_2cls.py
-
 import os
 import numpy as np
-import pandas as pdtorch
+import pandas as pd  # 修复导入
 from PIL import Image
 from sklearn.model_selection import train_test_split
 import torch
@@ -10,7 +8,6 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
-import pandas as pd
 from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister
 from qiskit_aer import AerSimulator
 from qiskit import transpile
@@ -26,12 +23,84 @@ class ImageDataset(Dataset):
     def __getitem__(self, idx):
         return self.images[idx], self.labels[idx]
 
+def quantum_encode_data(data: np.ndarray) -> np.ndarray:
+    """使用NNQE风格的量子编码"""
+    num_qubits = 12
+    qr = QuantumRegister(num_qubits, 'q')
+    cr = ClassicalRegister(num_qubits, 'c')
+    circuit = QuantumCircuit(qr, cr)
+    
+    # 数据编码
+    for i in range(num_qubits):
+        theta = np.pi * data[i]
+        circuit.ry(theta, qr[i])
+    
+    # Hadamard层
+    for i in range(num_qubits):
+        circuit.h(qr[i])
+    
+    circuit.barrier()
+    circuit.measure(qr, cr)
+    
+    # 运行电路
+    backend = AerSimulator(method='statevector')
+    compiled_circuit = transpile(circuit, backend, optimization_level=3)
+    job = backend.run(compiled_circuit, shots=1024)
+    result = job.result()
+    counts = result.get_counts(compiled_circuit)
+    
+    # 处理测量结果
+    features = np.zeros(num_qubits)
+    total_shots = sum(counts.values())
+    for state, count in counts.items():
+        state = state.split()[-1] if ' ' in state else state
+        for i, bit in enumerate(state):
+            features[i] += int(bit) * count / total_shots
+            
+    return features
+
+def preprocess_image(image_path: str, size: tuple = (32, 32)) -> np.ndarray:
+    """图像预处理和量子编码"""
+    try:
+        image = Image.open(image_path)
+        image = image.resize(size)
+        normalized = np.array(image) / 255.0
+        
+        # 转换为灰度
+        if len(normalized.shape) == 3:
+            grayscale = np.mean(normalized, axis=2)
+        else:
+            grayscale = normalized
+            
+        # 取样12个点用于量子编码
+        flattened = grayscale.flatten()
+        step = len(flattened) // 12
+        input_data = flattened[::step][:12]
+        
+        # 确保有12个点
+        if len(input_data) < 12:
+            input_data = np.pad(input_data, (0, 12 - len(input_data)))
+        
+        # 使用量子编码
+        quantum_features = quantum_encode_data(input_data)
+        return quantum_features
+        
+    except Exception as e:
+        print(f"Error processing image {image_path}: {str(e)}")
+        return np.zeros(12)  # 返回零向量而不是抛出异常
+
 class NNQECNN(nn.Module):
-    def __init__(self, num_features=256, num_classes=43):
+    def __init__(self, num_quantum_features=12, num_classes=43):
         super(NNQECNN, self).__init__()
         
-        # 将量子特征重构为图像格式
-        self.feature_size = int(np.sqrt(num_features))  # 应该是16 (256的平方根)
+        # 特征扩展层
+        self.feature_expansion = nn.Sequential(
+            nn.Linear(num_quantum_features, 256),
+            nn.ReLU(),
+            nn.BatchNorm1d(256)
+        )
+        
+        self.feature_size = 16  # 256 = 16*16
         
         # CNN部分
         self.conv_layers = nn.Sequential(
@@ -67,7 +136,7 @@ class NNQECNN(nn.Module):
         )
         
         # 计算卷积层输出大小
-        self.conv_output_size = 128 * 2 * 2  # 经过三次MaxPool2d后的大小
+        self.conv_output_size = 128 * 2 * 2
         
         # 分类层
         self.classifier = nn.Sequential(
@@ -85,7 +154,10 @@ class NNQECNN(nn.Module):
         )
 
     def forward(self, x):
-        # 重构量子特征为图像格式 [batch_size, 1, 16, 16]
+        # 特征扩展
+        x = self.feature_expansion(x)
+        
+        # 重构为图像格式
         x = x.view(-1, 1, self.feature_size, self.feature_size)
         
         # CNN特征提取
@@ -97,61 +169,6 @@ class NNQECNN(nn.Module):
         # 分类
         x = self.classifier(x)
         return x
-
-def preprocess_image(image_path: str, size: tuple = (32, 32)) -> np.ndarray:
-    try:
-        image = Image.open(image_path)
-        image = image.resize(size)
-        normalized = np.array(image) / 255.0
-        r = normalized[:,:,0].flatten()
-        g = normalized[:,:,1].flatten()
-        b = normalized[:,:,2].flatten()
-        combined = np.concatenate([r, g, b])
-        norm = np.sqrt(np.sum(combined**2))
-        if norm > 0:
-            normalized_amplitude = combined / norm
-        else:
-            normalized_amplitude = combined
-        return normalized_amplitude
-    except Exception as e:
-        raise Exception(f"Error preprocessing image {image_path}: {str(e)}")
-
-def quantum_encode_data(data: np.ndarray) -> np.ndarray:
-    """Apply quantum encoding using NNQE-style approach"""
-    num_qubits = 12
-    
-    qr = QuantumRegister(num_qubits, 'q')
-    cr = ClassicalRegister(num_qubits, 'c')
-    circuit = QuantumCircuit(qr, cr)
-    
-    # First encode data with RY
-    for i in range(num_qubits):
-        theta = np.pi * data[i]  # Full range encoding like NNQE
-        circuit.ry(theta, qr[i])
-    
-    # Then apply Hadamard to create superposition
-    for i in range(num_qubits):
-        circuit.h(qr[i])
-    
-    # Add barrier and measurement
-    circuit.barrier()
-    circuit.measure(qr, cr)
-    
-    backend = AerSimulator(method='statevector')
-    compiled_circuit = transpile(circuit, backend, optimization_level=3)
-    job = backend.run(compiled_circuit, shots=1024)
-    result = job.result()
-    
-    counts = result.get_counts(compiled_circuit)
-    
-    features = np.zeros(num_qubits)
-    total_shots = sum(counts.values())
-    for state, count in counts.items():
-        state = state.split()[-1] if ' ' in state else state
-        for i, bit in enumerate(state):
-            features[i] += int(bit) * count / total_shots
-            
-    return features
 
 def train_model(model, train_loader, val_loader, criterion, optimizer, num_epochs=10, device='cpu'):
     best_val_acc = 0.0
@@ -196,20 +213,25 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, num_epoch
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            torch.save(model.state_dict(), 'best_hybrid_model.pth')
+            torch.save(model.state_dict(), 'best_nnqe_model.pth')
             print(f'Best model saved with accuracy: {best_val_acc:.2f}%')
 
     return model
 
 def main():
+    print("Starting program...")  # 添加调试信息
+    
     num_epochs = 10
-    # Device configuration
-    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    device = torch.device('cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}")  # 添加调试信息
 
     print("Loading data...")
-    train_df = pd.read_csv("Train.csv")
-    test_df = pd.read_csv("Test.csv")
+    try:
+        train_df = pd.read_csv("Train.csv")
+        test_df = pd.read_csv("Test.csv")
+    except Exception as e:
+        print(f"Error loading CSV files: {str(e)}")
+        return
 
     print("Processing data...")
     train_features = [preprocess_image(path) for path in tqdm(train_df['Path'])]
@@ -217,6 +239,8 @@ def main():
 
     test_features = [preprocess_image(path) for path in tqdm(test_df['Path'])]
     test_labels = test_df['ClassId'].values
+
+    print(f"Train features shape: {len(train_features)}, {len(train_features[0])}")  # 添加调试信息
 
     x_train, x_val, y_train, y_val = train_test_split(
         train_features, train_labels, test_size=0.2, random_state=42
@@ -230,26 +254,23 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=0)
 
     # Initialize model
-    num_features = len(x_train[0])  # 根据输入特征的长度设置输入层大小
-    model = HybridNet(num_features=num_features).to(device)
+    model = NNQECNN(num_quantum_features=12, num_classes=43).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
     # Train model
     print("Training model...")
-    model = train_model(
-        model, train_loader, val_loader, criterion, optimizer,
-        num_epochs=num_epochs, device=device
-    )
-
-    # 加载最佳模型权重
-    if os.path.exists('best_hybrid_model.pth'):
-        model.load_state_dict(torch.load('best_hybrid_model.pth', map_location=device))
-        print("Best model weights loaded.")
+    try:
+        model = train_model(
+            model, train_loader, val_loader, criterion, optimizer,
+            num_epochs=num_epochs, device=device
+        )
+    except Exception as e:
+        print(f"Error during training: {str(e)}")
+        return
 
     # Evaluate on test set
     print("Evaluating on test set...")
-
     test_dataset = ImageDataset(test_features, test_labels)
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, num_workers=0)
 
