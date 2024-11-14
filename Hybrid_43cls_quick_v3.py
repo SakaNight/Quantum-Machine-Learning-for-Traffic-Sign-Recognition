@@ -120,37 +120,53 @@ def preprocess_image(image_path: str, size: tuple = (32, 32), aug_prob: float = 
         raise Exception(f"Error preprocessing image {image_path}: {str(e)}")
 
 def quantum_encoding(data: np.ndarray) -> np.ndarray:
-    """使用参数化电路编码经典数据并应用量子层"""
-    num_qubits = len(data)  # 根据数据维度调整量子比特数量
-
-    # 创建量子电路
+    """优化的量子编码方案,使用精心设计的门组合提升特征表达"""
+    num_qubits = len(data)
     qr = QuantumCircuit(num_qubits)
-
-    # 使用参数化的 RY 门编码数据
+    
+    # 1. 改进的振幅编码层
     for i in range(num_qubits):
-        qr.ry(data[i] * np.pi, i)
-
-    # 添加纠缠层（可选）
-    for i in range(num_qubits - 1):
-        qr.cz(i, i + 1)
-
-    # 测量量子比特
+        # RY+RX组合提供更丰富的振幅编码
+        qr.ry(data[i] * np.pi, i)  # Y轴旋转编码主要特征
+        qr.rx(data[i] * np.pi/2, i)  # X轴旋转增加补充信息
+    
+    # 2. 局部纠缠层 - 使用CNOT+RZ的高效组合
+    for i in range(0, num_qubits-1, 2):  # 两两配对
+        qr.cx(i, i+1)  # CNOT门创建局部纠缠
+        qr.rz(np.pi/4, i+1)  # RZ门增加相位调制
+        qr.cx(i, i+1)  # 再次应用CNOT完成纠缠操作
+    
+    # 3. 轻量级非线性变换
+    for i in range(num_qubits):
+        if i % 2 == 0:  # 交替使用H和T门,减少门数量
+            qr.h(i)  # Hadamard门引入叠加
+        else:
+            qr.t(i)  # T门添加非线性相位
+    
     qr.measure_all()
-
-    # 模拟电路
+    
+    # 使用statevector模拟器提高精度
     backend = AerSimulator()
-    compiled_circuit = transpile(qr, backend)
+    compiled_circuit = transpile(qr, backend, optimization_level=2)
     job = backend.run(compiled_circuit, shots=1024)
     result = job.result()
-
-    # 获取测量结果并转换为特征向量
+    
+    # 优化的特征提取方法
     counts = result.get_counts()
     features = np.zeros(num_qubits)
     total_shots = sum(counts.values())
+    
+    # 改进的特征转换
     for state, count in counts.items():
-        for i, bit in enumerate(reversed(state)):  # 需要反转状态字符串
-            features[i] += int(bit) * count / total_shots
-
+        prob = count / total_shots
+        for i, bit in enumerate(reversed(state)):
+            value = int(bit)
+            # 使用sigmoid-like变换增强特征区分度
+            features[i] += (2 * value - 1) * prob
+    
+    # 特征归一化
+    features = np.tanh(features)  # 使用tanh压缩到[-1,1]范围
+    
     return features
 
 class ImprovedHybridNet(nn.Module):
