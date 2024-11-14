@@ -27,7 +27,7 @@ class DatasetPklGenerator:
         self.class_distribution = stats
         return stats
 
-    def collect_training_data(self, root_dir, selected_classes=None):
+    def collect_training_data(self, root_dir, selected_classes=None, datasize=0):
         """
         Collect training data from folder structure where each class has its own folder
 
@@ -58,6 +58,8 @@ class DatasetPklGenerator:
                 continue
 
             df = pd.read_csv(csv_files[0], sep=';')
+            if datasize != 0:
+                df = df.sample(n=int(datasize/len(selected_classes))).reset_index(drop=True)
 
             # Collect samples
             samples = []
@@ -68,9 +70,10 @@ class DatasetPklGenerator:
             all_samples.extend(samples)
             class_counts[class_id] = len(samples)
 
+
         return all_samples, class_counts
 
-    def collect_test_data(self, csv_path, image_dir='', selected_classes=None):
+    def collect_test_data(self, csv_path, image_dir='', selected_classes=None, datasize=0):
         """
         Collect test data from a single CSV file
 
@@ -91,6 +94,9 @@ class DatasetPklGenerator:
         # Filter classes if needed
         if selected_classes is not None:
             df = df[df['ClassId'].isin(selected_classes)]
+
+        if datasize !=0:
+            df = df.sample(n=datasize).reset_index(drop=True)
 
         # Collect samples
         for _, row in df.iterrows():
@@ -146,7 +152,7 @@ class DatasetPklGenerator:
 
         return upsampled_samples
 
-    def create_dataset_pkl(self, output_pkl_path, selected_classes=None, is_training=False, up_sampling=True,**kwargs):
+    def create_dataset_pkl(self, output_pkl_path, selected_classes, datasize, is_training=False, up_sampling=True, **kwargs):
         """
         Create PKL file for either training or test dataset
 
@@ -163,18 +169,20 @@ class DatasetPklGenerator:
         """
         try:
             # Collect data based on dataset type
+
             if is_training:
                 if 'root_dir' not in kwargs:
                     raise ValueError("root_dir is required for training dataset")
                 samples, class_counts = self.collect_training_data(
-                    kwargs['root_dir'], selected_classes)
+                    kwargs['root_dir'], selected_classes, datasize)
             else:
                 if 'csv_path' not in kwargs:
                     raise ValueError("csv_path is required for test dataset")
                 samples, class_counts = self.collect_test_data(
                     kwargs['csv_path'],
                     kwargs.get('image_dir', ''),
-                    selected_classes)
+                    selected_classes,
+                    datasize)
 
             if len(samples) == 0:
                 raise ValueError("No samples found")
@@ -222,6 +230,8 @@ if __name__ == "__main__":
     generator = DatasetPklGenerator()
 
     # Parameters
+    trainset_size = 1000
+    testset_size = 100
     train_root = "Data/GTSRB_Final_Training_Images/GTSRB/Final_Training/Images"  # Contains class folders (00000, 00001, etc.)
     test_csv = "Data/GTSRB_Final_Test_GT/GT-final_test.csv"
     test_image_dir = "Data/GTSRB_Final_Test_Images/GTSRB/Final_Test/Images"
@@ -232,18 +242,20 @@ if __name__ == "__main__":
 
     # # Create training dataset
     train_data = generator.create_dataset_pkl(
-        output_pkl_path="pkls/train_dataset_binary.pkl",
+        output_pkl_path="pkls/train_dataset_1k.pkl",
         selected_classes=selected_classes,
+        datasize=trainset_size,
         is_training=True,
         up_sampling=False,
-        root_dir=train_root
+        root_dir=train_root,
     )
 
     # Create test dataset
     test_data = generator.create_dataset_pkl(
-        output_pkl_path="pkls/test_dataset_binary.pkl",
+        output_pkl_path="pkls/test_dataset_100.pkl",
         selected_classes=selected_classes,
+        datasize=testset_size,
         is_training=False,
         csv_path=test_csv,
-        image_dir=test_image_dir
+        image_dir=test_image_dir,
     )
