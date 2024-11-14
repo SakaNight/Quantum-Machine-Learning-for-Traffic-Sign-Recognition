@@ -6,6 +6,7 @@ from collections import Counter
 from glob import glob
 
 
+
 class DatasetPklGenerator:
     def __init__(self):
         self.class_distribution = None
@@ -189,7 +190,7 @@ class DatasetPklGenerator:
             # Fill dictionaries
             for idx, (image_path, class_id) in enumerate(samples):
                 image_paths[idx] = image_path
-                labels[idx] = class_id
+                labels[idx] = MAP_ID[class_id]
 
             # Create final data structure
             data = {
@@ -224,11 +225,14 @@ if __name__ == "__main__":
     train_root = "Data/GTSRB_Final_Training_Images/GTSRB/Final_Training/Images"  # Contains class folders (00000, 00001, etc.)
     test_csv = "Data/GTSRB_Final_Test_GT/GT-final_test.csv"
     test_image_dir = "Data/GTSRB_Final_Test_Images/GTSRB/Final_Test/Images"
-    selected_classes = None  # Use None for all classes, or specify classes using [0,1,2,5,27]
+    selected_classes = [1,2]  # Use None for all classes, or specify classes using [0,1,2,5,27]
+    MAP_ID = {}
+    for i, selected_class in enumerate(selected_classes):
+        MAP_ID[selected_class] = i
 
-    # Create training dataset
+    # # Create training dataset
     train_data = generator.create_dataset_pkl(
-        output_pkl_path="pkls/train_dataset_no_upsampling.pkl",
+        output_pkl_path="pkls/train_dataset_binary.pkl",
         selected_classes=selected_classes,
         is_training=True,
         up_sampling=False,
@@ -237,7 +241,7 @@ if __name__ == "__main__":
 
     # Create test dataset
     test_data = generator.create_dataset_pkl(
-        output_pkl_path="pkls/test_dataset.pkl",
+        output_pkl_path="pkls/test_dataset_binary.pkl",
         selected_classes=selected_classes,
         is_training=False,
         csv_path=test_csv,
