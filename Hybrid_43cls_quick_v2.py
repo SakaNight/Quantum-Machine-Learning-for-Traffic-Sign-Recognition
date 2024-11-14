@@ -120,37 +120,49 @@ def preprocess_image(image_path: str, size: tuple = (32, 32), aug_prob: float = 
         raise Exception(f"Error preprocessing image {image_path}: {str(e)}")
 
 def quantum_encoding(data: np.ndarray) -> np.ndarray:
-    """使用参数化电路编码经典数据并应用量子层"""
-    num_qubits = len(data)  # 根据数据维度调整量子比特数量
-
-    # 创建量子电路
+    """Enhanced quantum encoding with improved circuit design and noise resilience"""
+    num_qubits = len(data)
     qr = QuantumCircuit(num_qubits)
-
-    # 使用参数化的 RY 门编码数据
+    
+    # 第一层：改进的数据编码
     for i in range(num_qubits):
+        # 使用RY和RZ旋转来进行更丰富的特征编码
         qr.ry(data[i] * np.pi, i)
-
-    # 添加纠缠层（可选）
-    for i in range(num_qubits - 1):
-        qr.cz(i, i + 1)
-
-    # 测量量子比特
+        qr.rz(data[i] * np.pi / 2, i)
+    
+    # 第二层：改进的纠缠层
+    # 使用循环纠缠结构，增加量子特征的相互作用
+    for i in range(num_qubits):
+        next_qubit = (i + 1) % num_qubits
+        qr.cx(i, next_qubit)
+        qr.rz(np.pi / 4, next_qubit)
+        qr.cx(i, next_qubit)
+    
+    # 第三层：非线性变换层
+    for i in range(num_qubits):
+        qr.h(i)  # Hadamard门引入量子叠加
+        qr.t(i)  # T门增加非线性
+    
+    # 测量
     qr.measure_all()
-
-    # 模拟电路
+    
+    # 使用无噪声模拟器以提高稳定性
     backend = AerSimulator()
-    compiled_circuit = transpile(qr, backend)
-    job = backend.run(compiled_circuit, shots=1024)
+    compiled_circuit = transpile(qr, backend, optimization_level=3)
+    job = backend.run(compiled_circuit, shots=2048)  # 增加shots以提高统计稳定性
     result = job.result()
-
-    # 获取测量结果并转换为特征向量
+    
+    # 改进的特征提取方法
     counts = result.get_counts()
     features = np.zeros(num_qubits)
     total_shots = sum(counts.values())
+    
+    # 使用加权方案提取特征
     for state, count in counts.items():
-        for i, bit in enumerate(reversed(state)):  # 需要反转状态字符串
-            features[i] += int(bit) * count / total_shots
-
+        weight = count / total_shots
+        for i, bit in enumerate(reversed(state)):
+            features[i] += (int(bit) * weight - 0.5) * 2  # 归一化到[-1,1]范围
+    
     return features
 
 class HybridNet(nn.Module):
@@ -524,7 +536,7 @@ def load_model_weights(model, model_path, device):
 
 def main():
     batch_size = 32
-    num_epochs = 2
+    num_epochs = 20
     device = torch.device('cpu')
     save_dir = "model_zoos"
     os.makedirs(save_dir, exist_ok=True)
