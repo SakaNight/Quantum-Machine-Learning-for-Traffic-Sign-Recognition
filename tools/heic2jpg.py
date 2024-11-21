@@ -1,6 +1,8 @@
 import os
 import pyheif
+import shutil
 from PIL import Image
+from tqdm import tqdm
 
 
 def convert_heic_to_jpg(input_path, output_path):
@@ -26,18 +28,21 @@ def convert_heic_to_jpg(input_path, output_path):
 
     image.save(output_path, "JPEG")
 
-heic_image_folder = "/home/jamie/Works/Waterloo/ECE730/pics"
-jpg_image_foler = "{}_jpg".format(heic_image_folder)
+heic_image_folder = "/home/jamie/Downloads/pics_campus_heic"
 save_folder = "{}_labelme".format(heic_image_folder)
 
 os.makedirs(save_folder, exist_ok=True)
 
 print("Converting HEIC images to JPG format...")
 for root, dirs, files in os.walk(heic_image_folder):
-    for file in files:
-        if file.endswith(".HEIC"):
-            file_path = os.path.join(root, file)
+    for file in tqdm(files):
+        suffix = file.split(".")[-1]
+        file_path = os.path.join(root, file)
+        if suffix in ['heic', 'HEIC']:
             file_path_dst = os.path.join(save_folder, file.split(".")[0] + ".jpg")
             convert_heic_to_jpg(file_path, file_path_dst)
+        else:
+            file_path_dst = os.path.join(save_folder, file)
+            shutil.copy(file_path, file_path_dst)
 
 print("Done.")
