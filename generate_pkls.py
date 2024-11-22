@@ -27,7 +27,7 @@ class DatasetPklGenerator:
         self.class_distribution = stats
         return stats
 
-    def collect_training_data(self, root_dir, selected_classes=None, datasize=0):
+    def collect_training_data(self, root_dir, selected_classes, num_classes, datasize=0):
         """
         Collect training data from folder structure where each class has its own folder
 
@@ -51,29 +51,35 @@ class DatasetPklGenerator:
             if selected_classes is not None and class_id not in selected_classes:
                 continue
 
-            # Read class CSV file
-            csv_files = glob(os.path.join(folder, '*.csv'))
-            if not csv_files:
-                print(f"Warning: No CSV file found in {folder}")
-                continue
+            if class_id == 0:
+                samples = []
+                image_paths = glob(os.path.join(folder, '*.jpg'))
+                for image_path in image_paths:
+                    samples.append((image_path, class_id))
 
-            df = pd.read_csv(csv_files[0], sep=';')
-            if datasize != 0:
-                df = df.sample(n=int(datasize/len(selected_classes))).reset_index(drop=True)
+            else:
+                # Read class CSV file
+                csv_files = glob(os.path.join(folder, '*.csv'))
+                if not csv_files:
+                    print(f"Warning: No CSV file found in {folder}")
+                    continue
 
-            # Collect samples
-            samples = []
-            for _, row in df.iterrows():
-                image_path = os.path.join(folder, row['Filename'])
-                samples.append((image_path, class_id))
+                df = pd.read_csv(csv_files[0], sep=';')
+                if datasize != 0:
+                    df = df.sample(n=int(datasize/len(num_classes))).reset_index(drop=True)
+
+                # Collect samples
+                samples = []
+                for _, row in df.iterrows():
+                    image_path = os.path.join(folder, row['Filename'])
+                    samples.append((image_path, class_id))
 
             all_samples.extend(samples)
             class_counts[class_id] = len(samples)
 
-
         return all_samples, class_counts
 
-    def collect_test_data(self, csv_path, image_dir='', selected_classes=None, datasize=0):
+    def collect_test_data(self, csv_path, image_dir, selected_classes, num_classes, datasize=0):
         """
         Collect test data from a single CSV file
 
@@ -152,7 +158,7 @@ class DatasetPklGenerator:
 
         return upsampled_samples
 
-    def create_dataset_pkl(self, output_pkl_path, selected_classes, datasize, is_training=False, up_sampling=True, **kwargs):
+    def create_dataset_pkl(self, output_pkl_path, selected_classes, num_classes, datasize, is_training=False, up_sampling=True, **kwargs):
         """
         Create PKL file for either training or test dataset
 
@@ -167,14 +173,14 @@ class DatasetPklGenerator:
         Returns:
             dict: Dictionary containing image_paths and labels
         """
-        try:
+        if 1:
             # Collect data based on dataset type
 
             if is_training:
                 if 'root_dir' not in kwargs:
                     raise ValueError("root_dir is required for training dataset")
                 samples, class_counts = self.collect_training_data(
-                    kwargs['root_dir'], selected_classes, datasize)
+                    kwargs['root_dir'], selected_classes, num_classes, datasize)
             else:
                 if 'csv_path' not in kwargs:
                     raise ValueError("csv_path is required for test dataset")
@@ -182,6 +188,7 @@ class DatasetPklGenerator:
                     kwargs['csv_path'],
                     kwargs.get('image_dir', ''),
                     selected_classes,
+                    num_classes,
                     datasize)
 
             if len(samples) == 0:
@@ -198,7 +205,10 @@ class DatasetPklGenerator:
             # Fill dictionaries
             for idx, (image_path, class_id) in enumerate(samples):
                 image_paths[idx] = image_path
-                labels[idx] = MAP_ID[class_id]
+                if selected_classes is not None:
+                    labels[idx] = MAP_ID[class_id]
+                else:
+                    labels[idx] = class_id
 
             # Create final data structure
             data = {
@@ -220,9 +230,9 @@ class DatasetPklGenerator:
 
             return data
 
-        except Exception as e:
-            print(f"Error occurred: {str(e)}")
-            return None
+        # except Exception as e:
+        #     print(f"Error occurred: {str(e)}")
+        #     return None
 
 
 if __name__ == "__main__":
@@ -230,20 +240,23 @@ if __name__ == "__main__":
     generator = DatasetPklGenerator()
 
     # Parameters
-    trainset_size = 1000
-    testset_size = 100
+    trainset_size = 0  # 0 for default, replace with int numbers
+    testset_size = 0  # 0 for default, replace with int numbers
     train_root = "Data/GTSRB_Final_Training_Images/GTSRB/Final_Training/Images"  # Contains class folders (00000, 00001, etc.)
     test_csv = "Data/GTSRB_Final_Test_GT/GT-final_test.csv"
     test_image_dir = "Data/GTSRB_Final_Test_Images/GTSRB/Final_Test/Images"
-    selected_classes = [1,2]  # Use None for all classes, or specify classes using [0,1,2,5,27]
-    MAP_ID = {}
-    for i, selected_class in enumerate(selected_classes):
-        MAP_ID[selected_class] = i
+    selected_classes = None # Use None for all classes, or specify classes using [0,1,2,5,27]
+    num_classes = 43  # must match with selected_classes
+    if selected_classes is not None:
+        MAP_ID = {}
+        for i, selected_class in enumerate(selected_classes):
+            MAP_ID[selected_class] = i
 
     # # Create training dataset
     train_data = generator.create_dataset_pkl(
-        output_pkl_path="pkls/train_dataset_1k.pkl",
+        output_pkl_path="pkls/train_dataset_43cls_uw.pkl",
         selected_classes=selected_classes,
+        num_classes=num_classes,
         datasize=trainset_size,
         is_training=True,
         up_sampling=False,
@@ -252,8 +265,9 @@ if __name__ == "__main__":
 
     # Create test dataset
     test_data = generator.create_dataset_pkl(
-        output_pkl_path="pkls/test_dataset_100.pkl",
+        output_pkl_path="pkls/test_dataset_43cls_uw.pkl",
         selected_classes=selected_classes,
+        num_classes=num_classes,
         datasize=testset_size,
         is_training=False,
         csv_path=test_csv,
