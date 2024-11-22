@@ -20,6 +20,10 @@ from qiskit import transpile
 from qiskit.circuit.library import ZFeatureMap, RealAmplitudes
 
 
+from sklearn.decomposition import PCA
+import torch.nn.functional as F
+
+
 class ImageDataset(Dataset):
     def __init__(self, images, labels):
         self.images = torch.FloatTensor(images)
@@ -132,16 +136,19 @@ class RealAmplitudesEncoder:
             encoded_data[i] = self.real_amplitudes.bind_parameters(data[i]).parameters
         return encoded_data
 
-def parameterized_quantum_encoding(data: np.ndarray) -> np.ndarray:
+
+def parameterized_quantum_encoding(data: torch.Tensor) -> torch.Tensor:
     """使用参数化电路编码经典数据并应用量子层"""
-    num_qubits = len(data)  # 根据数据维度调整量子比特数量
+    batch_size, num_features = data.shape
+    num_qubits = num_features  # 根据数据维度调整量子比特数量
 
     # 创建量子电路
     qr = QuantumCircuit(num_qubits)
 
     # 使用参数化的 RY 门编码数据
-    for i in range(num_qubits):
-        qr.ry(data[i] * np.pi, i)
+    for sample_idx in range(batch_size):
+        for i in range(num_qubits):
+            qr.ry(data[sample_idx, i].numpy() * np.pi, i)
 
     # 添加纠缠层（可选）
     for i in range(num_qubits - 1):
@@ -158,40 +165,91 @@ def parameterized_quantum_encoding(data: np.ndarray) -> np.ndarray:
 
     # 获取测量结果并转换为特征向量
     counts = result.get_counts()
-    features = np.zeros(num_qubits)
-    total_shots = sum(counts.values())
-    for state, count in counts.items():
-        for i, bit in enumerate(reversed(state)):  # 需要反转状态字符串
-            features[i] += int(bit) * count / total_shots
+    features = torch.zeros(batch_size, num_qubits)
+    for sample_idx in range(batch_size):
+        for state, count in counts.items():
+            for i, bit in enumerate(reversed(state)):
+                features[sample_idx, i] += int(bit) * count / 1024
 
-    return features
+    return features.reshape(batch_size, 3, 3, 3)
+
+
+import torch
+import torch.nn as nn
 
 class HybridNet(nn.Module):
     def __init__(self, num_features, num_classes, encoding_method):
         super(HybridNet, self).__init__()
 
-        # Classical layers after quantum features
-        self.classical_layers = nn.Sequential(
-            nn.Linear(num_features, 64),
-            nn.ReLU(),
-            nn.BatchNorm1d(64),
-            nn.Dropout(0.3),
+        # Quantum encoding layer
+        self.quantum_encoding = encoding_method
 
-            nn.Linear(64, 128),
+        # Deconvolution layers to upsample to (batch_size, 3, 32, 32)
+        self.deconv_layers = nn.Sequential(
+            nn.ConvTranspose2d(3, 16, kernel_size=3, stride=2, padding=1, output_padding=1),  # (batch_size, 16, 6, 6)
             nn.ReLU(),
-            nn.BatchNorm1d(128),
-            nn.Dropout(0.3),
-
-            nn.Linear(128, 64),
+            nn.ConvTranspose2d(16, 32, kernel_size=3, stride=2, padding=1, output_padding=1), # (batch_size, 32, 12, 12)
             nn.ReLU(),
-            nn.BatchNorm1d(64),
-            nn.Dropout(0.3),
-
-            nn.Linear(64, num_classes)
+            nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=1), # (batch_size, 16, 24, 24)
+            nn.ReLU(),
+            nn.ConvTranspose2d(16, 3, kernel_size=3, stride=2, padding=1, output_padding=1)   # (batch_size, 3, 32, 32)
         )
 
+        # Classical layers
+        self.classical_layers = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),  # (batch_size, 32, 16, 16)
+
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),  # (batch_size, 64, 8, 8)
+
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2)   # (batch_size, 128, 4, 4)
+        )
+
+        # Fully connected layers
+        self.fc_layers = nn.Sequential(
+            nn.Linear(128 * 4 * 4, 256),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+
+            nn.Linear(128, num_classes)
+        )
+
+    # def forward(self, x):
+        # # Quantum encoding step
+        # x = self.quantum_encoding(x)  # 输入假定为 (batch_size, num_features)
+        # x = x.view(x.size(0), 3, 3, 3)  # 变形为 (batch_size, 3, 3, 3)
+        #
+        # # Upsample using deconvolution
+        # x = self.deconv_layers(x)  # 输出形状为 (batch_size, 3, 32, 32)
+        #
+        # # Classical layers
+        # x = self.classical_layers(x)  # 提取特征
+        # x = x.view(x.size(0), -1)    # 展平为全连接层输入
+        # x = self.fc_layers(x)        # 分类
+        # return x
     def forward(self, x):
-        return self.classical_layers(x)
+        # Quantum encoding
+        x = self.quantum_encoding(x)
+        x = x.view(x.size(0), 3, 3, 3)
+        x = self.deconv_layers(x)  # 输出 (batch_size, 3, 32, 32)
+        x = F.interpolate(x, size=(32, 32), mode='bilinear', align_corners=False)
+
+        # Classical layers
+        x = self.classical_layers(x)  # 提取特征
+        x = x.view(x.size(0), -1)  # 展平
+        x = self.fc_layers(x)
+        return x
+
+
 
 def train_model(model, train_loader, val_loader, criterion, optimizer, num_epochs=10,
                 device='cpu', start_epoch=0, save_model="best_model.pth"):
@@ -572,9 +630,22 @@ def main():
     train_features = np.array(train_features)
     test_features = np.array(test_features)
 
+    # PCA降维
+    # 初始化PCA并进行降维
+    # 将训练集和测试集的特征数据合并
+    feats_all = np.concatenate([train_features, test_features], axis=0)
+
+    # 使用合并后的数据训练 PCA 模型
+    pca = PCA(n_components=27)
+    feats_all_reduced = pca.fit_transform(feats_all)
+
+    # 将降维后的数据拆分回训练集和测试集
+    feats_train_reduced = feats_all_reduced[:len(train_features)]
+    feats_test_reduced = feats_all_reduced[len(test_features):]
+
     # Split training data
     x_train, x_val, y_train, y_val = train_test_split(
-        train_features, train_labels, test_size=0.2, random_state=42
+        feats_train_reduced, train_labels, test_size=0.2, random_state=42
     )
 
     # Create data loaders
@@ -585,7 +656,7 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
 
     # Initialize model
-    num_features = train_features.shape[1]  # 使用shape获取特征数量
+    num_features = feats_train_reduced.shape[1]  # 使用shape获取特征数量
     model = HybridNet(num_features=num_features, num_classes=43, encoding_method=parameterized_quantum_encoding).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
@@ -616,7 +687,7 @@ def main():
     )
 
     # 创建测试数据加载器
-    test_dataset = ImageDataset(test_features, test_labels)
+    test_dataset = ImageDataset(feats_test_reduced, test_labels)
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, num_workers=4)
 
     # 初始化模型
