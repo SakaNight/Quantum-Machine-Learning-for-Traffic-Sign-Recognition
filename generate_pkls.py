@@ -109,7 +109,8 @@ class DatasetPklGenerator:
             df = df[df['ClassId'].isin(selected_classes)]
 
         if datasize !=0:
-            df = df.sample(n=datasize).reset_index(drop=True)
+            df = df.groupby('ClassId').apply(lambda x: x.sample(n=min(int(datasize/num_classes), len(x)), random_state=42)).reset_index(
+                drop=True)
 
         # Collect samples
         for _, row in df.iterrows():
@@ -248,7 +249,7 @@ if __name__ == "__main__":
 
     # Parameters
     trainset_size = 100  # 0 for default, replace with int numbers
-    testset_size = 0  # 0 for default, replace with int numbers
+    testset_size = 100  # 0 for default, replace with int numbers
     train_root = "/home/jamie/Works/Waterloo/ECE730/ECE730Project/Data/GTSRB/Final_Training/Images"  # Contains class folders (00000, 00001, etc.)
     test_csv = "/home/jamie/Works/Waterloo/ECE730/ECE730Project/Data/GTSRB/GT-final_test.csv"
     test_image_dir = "/home/jamie/Works/Waterloo/ECE730/ECE730Project/Data/GTSRB/Final_Test/Images"
@@ -259,24 +260,24 @@ if __name__ == "__main__":
         for i, selected_class in enumerate(selected_classes):
             MAP_ID[selected_class] = i
 
-    # # Create training dataset
-    train_data = generator.create_dataset_pkl(
-        output_pkl_path="pkls/train_dataset_43cls_uw_100.pkl",
-        selected_classes=selected_classes,
-        num_classes=num_classes,
-        datasize=trainset_size,
-        is_training=True,
-        up_sampling=False,
-        root_dir=train_root,
-    )
-
-    # # Create test dataset
-    # test_data = generator.create_dataset_pkl(
-    #     output_pkl_path="pkls/test_dataset_43cls_uw.pkl",
+    # # # Create training dataset
+    # train_data = generator.create_dataset_pkl(
+    #     output_pkl_path="pkls/train_dataset_43cls_uw_100.pkl",
     #     selected_classes=selected_classes,
     #     num_classes=num_classes,
-    #     datasize=testset_size,
-    #     is_training=False,
-    #     csv_path=test_csv,
-    #     image_dir=test_image_dir,
+    #     datasize=trainset_size,
+    #     is_training=True,
+    #     up_sampling=False,
+    #     root_dir=train_root,
     # )
+
+    # Create test dataset
+    test_data = generator.create_dataset_pkl(
+        output_pkl_path="pkls/test_dataset_43cls_uw_100.pkl",
+        selected_classes=selected_classes,
+        num_classes=num_classes,
+        datasize=testset_size,
+        is_training=False,
+        csv_path=test_csv,
+        image_dir=test_image_dir,
+    )
