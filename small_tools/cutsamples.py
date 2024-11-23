@@ -54,12 +54,15 @@ def crop_and_save_from_json_dir(json_dir, image_dir, output_dir):
             save_path = os.path.join(output_dir, save_name)
 
             # 保存裁剪后的图片
-            cv2.imwrite(save_path, cropped_image)
-            print(f"Saved: {save_path}")
+            try:
+                cv2.imwrite(save_path, cropped_image)
+                print(f"Saved: {save_path}")
+            except Exception as e:
+                print(f"Error: {e} for ", image_path)
 
 # 使用示例
-json_dir = "/home/jamie/Works/Waterloo/ECE730/pics_labelme"    # 存放 JSON 文件的目录
-image_dir = "/home/jamie/Works/Waterloo/ECE730/pics_labelme"       # 存放原图的目录
+json_dir = "/home/jamie/Works/Waterloo/ECE730/pics_campus_labelme"    # 存放 JSON 文件的目录
+image_dir = "/home/jamie/Works/Waterloo/ECE730/pics_campus_labelme"       # 存放原图的目录
 output_dir = "/home/jamie/Works/Waterloo/ECE730/cut"      # 存放裁剪结果的目录
 
 crop_and_save_from_json_dir(json_dir, image_dir, output_dir)
