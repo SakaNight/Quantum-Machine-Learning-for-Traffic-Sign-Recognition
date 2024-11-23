@@ -8,18 +8,18 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from sklearn.model_selection import train_test_split
-from training_tools import TrainingTools, EvaluationTools, BaseDataset, ModelLoader
+from training_tools import TrainingTools, EvaluationTools, BaseDataset, ModelLoader, DataAugmentation
 
 class CNNNet(nn.Module):
     def __init__(self, num_features, num_classes):
         super(CNNNet, self).__init__()
         
-        # 添加一个线性层来调整维度
+        # 调整输入层以适应3通道
         self.input_fc = nn.Linear(num_features, 32*32*3)
         
         # Classical layers after quantum features
         self.classical_layers = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1),  # 输入通道改为3
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2),
 
@@ -46,7 +46,7 @@ class CNNNet(nn.Module):
 
     def forward(self, x):
         x = self.input_fc(x)
-        x = x.view(-1, 3, 32, 32)
+        x = x.view(-1, 3, 32, 32)  # 重塑为3通道
         x = self.classical_layers(x)
         x = x.view(x.size(0), -1)
         x = self.fc_layers(x)
@@ -55,7 +55,7 @@ class CNNNet(nn.Module):
 def main():
     # 配置参数
     batch_size = 32
-    num_epochs = 1
+    num_epochs = 80
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model_name = "Classical_43cls"
     
@@ -82,31 +82,24 @@ def main():
     with open("pkls/test_dataset.pkl", 'rb') as f:
         test_data = pickle.load(f)
 
-    # 添加图像加载和处理函数
-    def load_and_preprocess_image(image_path):
-        """Load and preprocess a single image"""
-        try:
-            img = tf.keras.preprocessing.image.load_img(image_path, target_size=(28, 28), color_mode='grayscale')
-            img_array = tf.keras.preprocessing.image.img_to_array(img)
-            img_array = img_array / 255.0
-            return img_array
-        except Exception as e:
-            print(f"Error loading image {image_path}: {str(e)}")
-            return None
-
+    # 在这里初始化数据增强工具
+    data_augmentor = DataAugmentation(size=(28, 28), aug_prob=0.5)
+    
     print("\nProcessing training images...")
     train_paths = list(train_data['image_paths'].values())
-    train_features = np.array([load_and_preprocess_image(path) for path in tqdm(train_paths, desc="Processing train images")])
-    train_labels = np.array(list(train_data['labels'].values()))
+    train_labels = list(train_data['labels'].values())
+    train_features, train_labels = data_augmentor.process_dataset(
+        train_paths, train_labels, is_training=True
+    )
+    train_features = train_features.reshape(train_features.shape[0], -1)
 
     print("\nProcessing test images...")
     test_paths = list(test_data['image_paths'].values())
-    test_features = np.array([load_and_preprocess_image(path) for path in tqdm(test_paths, desc="Processing test images")])
-    test_labels = np.array(list(test_data['labels'].values()))
-
-    # 处理维度，确保图像数据是正确的形状
-    train_features = train_features.reshape(train_features.shape[0], -1)  # 展平图像
-    test_features = test_features.reshape(test_features.shape[0], -1)  # 展平图像
+    test_labels = list(test_data['labels'].values())
+    test_features, test_labels = data_augmentor.process_dataset(
+        test_paths, test_labels, is_training=False
+    )
+    test_features = test_features.reshape(test_features.shape[0], -1)
 
     # 分割训练和验证数据
     train_features, val_features, train_labels, val_labels = train_test_split(
@@ -156,7 +149,7 @@ def main():
         device=device,
         model_name=model_name,
         start_epoch=start_epoch,
-        early_stopping_patience=5
+        early_stopping_patience=None
     )
 
     # 加载最佳模型进行评估
