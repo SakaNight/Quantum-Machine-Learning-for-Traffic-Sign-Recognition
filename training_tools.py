@@ -10,6 +10,7 @@ import seaborn as sns
 from datetime import datetime
 import pandas as pd
 from sklearn.metrics import precision_recall_fscore_support, classification_report, confusion_matrix
+from PIL import Image, ImageEnhance
 
 class BaseDataset(Dataset):
     """Base dataset class for handling tensor conversion"""
@@ -25,6 +26,93 @@ class BaseDataset(Dataset):
     def __getitem__(self, idx):
         return self.images[idx], self.labels[idx]
 
+class DataAugmentation:
+    """数据增强工具类"""
+    def __init__(self, size=(28, 28), aug_prob=0.5):
+        self.size = size
+        self.aug_prob = aug_prob
+
+    def preprocess_image(self, image_path: str, label: int, is_training: bool = False):
+        """
+        预处理彩色图像，包括数据增强（仅训练时）和标准化
+        
+        Args:
+            image_path: 图像路径
+            label: 图像标签
+            is_training: 是否为训练模式
+        """
+        try:
+            # 加载彩色图像
+            image = Image.open(image_path).convert('RGB')
+            
+            # 只在训练模式下考虑数据增强
+            if is_training and np.random.random() < self.aug_prob:
+                augmentations = [
+                    ('rotate', np.random.random() < 0.3),
+                    ('flip', np.random.random() < 0.3),
+                    ('brightness', np.random.random() < 0.3),
+                    ('contrast', np.random.random() < 0.3),
+                    ('noise', np.random.random() < 0.3)
+                ]
+                
+                for aug_type, apply in augmentations:
+                    if apply:
+                        if aug_type == 'rotate':
+                            angle = np.random.uniform(-15, 15)
+                            image = image.rotate(angle, expand=False, resample=Image.BILINEAR)
+                        
+                        elif aug_type == 'flip' and label not in [33,34,36,37,38,39]:
+                            if np.random.random() < 0.5:
+                                image = image.transpose(Image.FLIP_LEFT_RIGHT)
+                        
+                        elif aug_type == 'brightness':
+                            factor = np.random.uniform(0.8, 1.2)
+                            enhancer = ImageEnhance.Brightness(image)
+                            image = enhancer.enhance(factor)
+                        
+                        elif aug_type == 'contrast':
+                            factor = np.random.uniform(0.8, 1.2)
+                            enhancer = ImageEnhance.Contrast(image)
+                            image = enhancer.enhance(factor)
+                        
+                        elif aug_type == 'noise':
+                            img_array = np.array(image)
+                            noise = np.random.normal(0, 5, img_array.shape)
+                            noisy_img = img_array + noise
+                            noisy_img = np.clip(noisy_img, 0, 255)
+                            image = Image.fromarray(noisy_img.astype(np.uint8))
+
+            # 调整图像大小
+            image = image.resize(self.size)
+            
+            # 转换为numpy数组并标准化到 [0,1] 范围
+            img_array = np.array(image) / 255.0
+            return img_array
+
+        except Exception as e:
+            print(f"Error preprocessing image {image_path}: {str(e)}")
+            return None
+
+    def process_dataset(self, image_paths, labels, is_training=False):
+        """
+        处理整个数据集
+        
+        Args:
+            image_paths: 图像路径列表
+            labels: 标签列表
+            is_training: 是否为训练模式
+        """
+        features = []
+        processed_labels = []
+        
+        for path, label in zip(image_paths, labels):
+            img = self.preprocess_image(path, label, is_training)
+            if img is not None:
+                features.append(img)
+                processed_labels.append(label)
+                
+        return np.array(features), np.array(processed_labels)
+    
 class ModelLoader:
     """用于加载模型和训练状态的工具类"""
     def __init__(self, checkpoint_dir='checkpoints'):
