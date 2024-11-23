@@ -1,6 +1,7 @@
 import pandas as pd
 import pickle
 import os
+import random
 import numpy as np
 from collections import Counter
 from glob import glob
@@ -54,8 +55,14 @@ class DatasetPklGenerator:
             if class_id == 0:
                 samples = []
                 image_paths = glob(os.path.join(folder, '*.jpg'))
-                for image_path in image_paths:
-                    samples.append((image_path, class_id))
+                if datasize != 0:
+                    num_pick = int(datasize/(num_classes))
+                    sampled_paths = random.sample(image_paths, num_pick)
+                    for image_path in sampled_paths:
+                        samples.append((image_path, class_id))
+                else:
+                    for image_path in image_paths:
+                        samples.append((image_path, class_id))
 
             else:
                 # Read class CSV file
@@ -66,7 +73,7 @@ class DatasetPklGenerator:
 
                 df = pd.read_csv(csv_files[0], sep=';')
                 if datasize != 0:
-                    df = df.sample(n=int(datasize/len(num_classes))).reset_index(drop=True)
+                    df = df.sample(n=int(datasize/(num_classes))).reset_index(drop=True)
 
                 # Collect samples
                 samples = []
@@ -240,11 +247,11 @@ if __name__ == "__main__":
     generator = DatasetPklGenerator()
 
     # Parameters
-    trainset_size = 0  # 0 for default, replace with int numbers
+    trainset_size = 100  # 0 for default, replace with int numbers
     testset_size = 0  # 0 for default, replace with int numbers
-    train_root = "Data/GTSRB_Final_Training_Images/GTSRB/Final_Training/Images"  # Contains class folders (00000, 00001, etc.)
-    test_csv = "Data/GTSRB_Final_Test_GT/GT-final_test.csv"
-    test_image_dir = "Data/GTSRB_Final_Test_Images/GTSRB/Final_Test/Images"
+    train_root = "/home/jamie/Works/Waterloo/ECE730/ECE730Project/Data/GTSRB/Final_Training/Images"  # Contains class folders (00000, 00001, etc.)
+    test_csv = "/home/jamie/Works/Waterloo/ECE730/ECE730Project/Data/GTSRB/GT-final_test.csv"
+    test_image_dir = "/home/jamie/Works/Waterloo/ECE730/ECE730Project/Data/GTSRB/Final_Test/Images"
     selected_classes = None # Use None for all classes, or specify classes using [0,1,2,5,27]
     num_classes = 43  # must match with selected_classes
     if selected_classes is not None:
@@ -254,7 +261,7 @@ if __name__ == "__main__":
 
     # # Create training dataset
     train_data = generator.create_dataset_pkl(
-        output_pkl_path="pkls/train_dataset_43cls_uw.pkl",
+        output_pkl_path="pkls/train_dataset_43cls_uw_100.pkl",
         selected_classes=selected_classes,
         num_classes=num_classes,
         datasize=trainset_size,
@@ -263,13 +270,13 @@ if __name__ == "__main__":
         root_dir=train_root,
     )
 
-    # Create test dataset
-    test_data = generator.create_dataset_pkl(
-        output_pkl_path="pkls/test_dataset_43cls_uw.pkl",
-        selected_classes=selected_classes,
-        num_classes=num_classes,
-        datasize=testset_size,
-        is_training=False,
-        csv_path=test_csv,
-        image_dir=test_image_dir,
-    )
+    # # Create test dataset
+    # test_data = generator.create_dataset_pkl(
+    #     output_pkl_path="pkls/test_dataset_43cls_uw.pkl",
+    #     selected_classes=selected_classes,
+    #     num_classes=num_classes,
+    #     datasize=testset_size,
+    #     is_training=False,
+    #     csv_path=test_csv,
+    #     image_dir=test_image_dir,
+    # )
