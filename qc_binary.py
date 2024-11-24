@@ -105,13 +105,13 @@ def preprocess_image(image_path: str, size: tuple = (28, 28)) -> np.ndarray:
 def main():
     EPOCHS = 40
     BATCH_SIZE = 32
-    save_model_path = "./model_zoos/qc_binary_2cls.h5"
+    save_model_path = "./model_zoos/qc_binary_2cls_1-13.h5"
 
     print("Loading data from pickle files...")
-    with open("./pkls/train_dataset_2cls.pkl", 'rb') as f:
+    with open("./pkls/train_dataset_2cls_1-13.pkl", 'rb') as f:
         train_data = pickle.load(f)
 
-    with open("./pkls/test_dataset_2cls.pkl", 'rb') as f:
+    with open("./pkls/test_dataset_2cls_1-13.pkl", 'rb') as f:
         test_data = pickle.load(f)
 
     print("Processing training data...")
