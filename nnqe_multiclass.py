@@ -13,8 +13,11 @@ from datetime import datetime
 
 from PIL import Image
 from sklearn.model_selection import train_test_split
+import torch
 
 from multiprocessing import Pool
+
+from tools import train_model
 
 
 class ImageDataset(Dataset):
@@ -125,7 +128,7 @@ def preprocess_images_parallel(image_paths, num_workers=2):
     return features
 
 class NNQECNN(nn.Module):
-    def __init__(self, num_classes=43):
+    def __init__(self, num_classes):
         super(NNQECNN, self).__init__()
         
         # 计算输入维度：16x16个窗口，每个窗口4个特征
@@ -146,112 +149,33 @@ class NNQECNN(nn.Module):
         return self.classifier(x)
 
 
-def train_model(model, train_loader, val_loader, criterion, optimizer, num_epochs=2, device='cpu',
-                save_dir='checkpoints'):
-    best_val_acc = 0.0
-
-    for epoch in range(num_epochs):
-        # Training phase
-        model.train()
-        running_loss = 0.0
-        train_correct = 0
-        train_total = 0
-
-        pbar = tqdm(train_loader, desc=f'Epoch {epoch + 1}/{num_epochs} - Training')
-        for inputs, labels in pbar:
-            inputs, labels = inputs.to(device).to(torch.float32), labels.to(device)
-            optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-
-            running_loss += loss.item() * labels.size(0)
-            _, predicted = outputs.max(1)
-            train_total += labels.size(0)
-            train_correct += predicted.eq(labels).sum().item()
-
-            pbar.set_postfix({
-                'loss': running_loss / train_total,
-                'train_acc': 100. * train_correct / train_total
-            })
-
-        train_acc = 100. * train_correct / train_total
-        print(f'Epoch {epoch + 1}/{num_epochs} - Training Accuracy: {train_acc:.2f}%')
-
-        # Validation phase
-        model.eval()
-        val_loss = 0.0
-        val_correct = 0
-        val_total = 0
-
-        pbar_val = tqdm(val_loader, desc=f'Epoch {epoch + 1}/{num_epochs} - Validation')
-        with torch.no_grad():
-            for inputs, labels in pbar_val:
-                inputs, labels = inputs.to(device).to(torch.float32), labels.to(device)
-                outputs = model(inputs)
-                loss = criterion(outputs, labels)
-
-                val_loss += loss.item() * labels.size(0)
-                _, predicted = outputs.max(1)
-                val_total += labels.size(0)
-                val_correct += predicted.eq(labels).sum().item()
-
-                pbar_val.set_postfix({
-                    'val_loss': val_loss / val_total,
-                    'val_acc': 100. * val_correct / val_total
-                })
-
-        val_acc = 100. * val_correct / val_total
-        print(f'Epoch {epoch + 1}/{num_epochs} - Validation Accuracy: {val_acc:.2f}%')
-
-        if (epoch+1) % 5 == 0:
-            # Save checkpoint after every 5 epoch
-            checkpoint = {
-                'epoch': epoch + 1,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'train_acc': train_acc,
-                'val_acc': val_acc,
-                'train_loss': running_loss / train_total,
-                'val_loss': val_loss / val_total
-            }
-            torch.save(checkpoint, os.path.join(save_dir, f'checkpoint_epoch_{epoch + 1}.pth'))
-
-        # Save best model
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            torch.save({
-                'epoch': epoch + 1,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'best_val_acc': best_val_acc,
-                'train_acc': train_acc,
-                'val_loss': val_loss / val_total,
-                'train_loss': running_loss / train_total
-            }, os.path.join(save_dir, 'best_model.pth'))
-            print(f'New best model saved with validation accuracy: {best_val_acc:.2f}%')
-
-    return model
-
 def main():
-    torch.backends.cudnn.benchmark = True  # 启用cudnn自动调优
-    torch.backends.cudnn.deterministic = False  # 关闭确定性模式以提高性能
-    num_epochs = 40
-    num_classes = 10  # todo check
-    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.deterministic = False
+    num_epochs = 80
+    num_classes = 2  # todo check before run
     device = torch.device('cpu')
+
+    # 添加预训练模型相关参数
+    pretrained_path = "" # "runs/nnqe/20241123_10cls_1k/best_model.pth"  # 设置预训练模型路径
+    resume_training = False  # 是否继续训练
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     save_dir = os.path.join('runs', 'nnqe', timestamp)
     os.makedirs(save_dir, exist_ok=True)
-    last_model_path = os.path.join(save_dir, "last.pth")
 
+    # 创建子目录
+    checkpoints_dir = os.path.join(save_dir, 'checkpoints')
+    os.makedirs(checkpoints_dir, exist_ok=True)
+
+    last_model_path = os.path.join(checkpoints_dir, "last.pth")
+
+    # [数据加载部分保持不变...]
     print("Loading data from pickle files...")
-    with open("pkls/train_dataset_10cls_2k.pkl", 'rb') as f:  # todo change for big dataset
+    with open("pkls/train_dataset_2cls_debug.pkl", 'rb') as f:  # todo check before run
         train_data = pickle.load(f)
 
-    with open("pkls/test_dataset_10cls_200.pkl", 'rb') as f:
+    with open("pkls/test_dataset_2cls_debug.pkl", 'rb') as f:  # todo check before run
         test_data = pickle.load(f)
 
     # processing data
@@ -265,7 +189,6 @@ def main():
     for path in tqdm(train_paths):
         classical_data = preprocess_image(path)
         train_features.append(classical_data)
-    # train_features = preprocess_images_parallel(train_paths)
 
     train_features = np.array(train_features)
 
@@ -278,18 +201,12 @@ def main():
     test_features = np.array(test_features)
     test_labels = np.array(test_labels)
 
-    # # Split data
-    # x_train, x_val, y_train, y_val = train_test_split(
-    #     train_features, train_labels, test_size=0.2, random_state=42)  # todo: check for debug
-
     # Create data loaders
     train_dataset = ImageDataset(train_features, train_labels)
-    # val_dataset = ImageDataset(x_val, y_val)
     test_dataset = ImageDataset(test_features, test_labels)
 
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4)
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, num_workers=4)
-    # val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=4)
 
     print("Initializing model...")
     model = NNQECNN(num_classes).to(device)
@@ -298,7 +215,10 @@ def main():
 
     print("Training model...")
     model = train_model(
-        model, train_loader, test_loader, criterion, optimizer, num_epochs, device, save_dir
+        model, train_loader, test_loader, criterion, optimizer,
+        num_epochs, device, save_dir,
+        pretrained_path=pretrained_path,  # 添加预训练模型路径
+        resume_training=resume_training  # 添加是否继续训练的标志
     )
 
     print("Evaluating on test set...")
