@@ -56,11 +56,28 @@ class DatasetPklGenerator:
                 samples = []
                 image_paths = glob(os.path.join(folder, '*.jpg'))
                 if datasize != 0:
-                    num_pick = int(datasize/(num_classes))
-                    sampled_paths = random.sample(image_paths, num_pick)
+                    num_pick = int(datasize / num_classes)
+                    current_size = len(image_paths)
+
+                    if current_size >= num_pick:
+                        # 数据充足，直接随机采样
+                        sampled_paths = random.sample(image_paths, num_pick)
+                    else:
+                        # 数据不足，需要重复采样
+                        # 计算需要复制的次数
+                        repeat_times = num_pick // current_size + 1
+
+                        # 复制图片路径列表
+                        extended_paths = image_paths * repeat_times
+
+                        # 从扩充后的路径列表中随机采样所需数量
+                        sampled_paths = random.sample(extended_paths, num_pick)
+
+                    # 生成样本对
                     for image_path in sampled_paths:
                         samples.append((image_path, class_id))
                 else:
+                    # 如果 datasize = 0，使用所有数据
                     for image_path in image_paths:
                         samples.append((image_path, class_id))
 
@@ -73,7 +90,24 @@ class DatasetPklGenerator:
 
                 df = pd.read_csv(csv_files[0], sep=';')
                 if datasize != 0:
-                    df = df.sample(n=int(datasize/(num_classes))).reset_index(drop=True)
+                    num_diff = df.Height.size - int(datasize / num_classes)
+                    if num_diff >= 0:
+                        # 数据充足，直接随机采样
+                        num_pick = int(datasize / num_classes)
+                        df = df.sample(n=num_pick).reset_index(drop=True)
+                    else:
+                        # 数据不足，需要重复采样
+                        num_pick = int(datasize / num_classes)
+                        current_size = df.Height.size
+
+                        # 计算需要复制的次数
+                        repeat_times = num_pick // current_size + 1
+
+                        # 复制数据框
+                        df_repeated = pd.concat([df] * repeat_times, ignore_index=True)
+
+                        # 从扩充后的数据框中随机采样所需数量
+                        df = df_repeated.sample(n=num_pick).reset_index(drop=True)
 
                 # Collect samples
                 samples = []
@@ -181,66 +215,63 @@ class DatasetPklGenerator:
         Returns:
             dict: Dictionary containing image_paths and labels
         """
-        if 1:
-            # Collect data based on dataset type
+        # Collect data based on dataset type
 
-            if is_training:
-                if 'root_dir' not in kwargs:
-                    raise ValueError("root_dir is required for training dataset")
-                samples, class_counts = self.collect_training_data(
-                    kwargs['root_dir'], selected_classes, num_classes, datasize)
+        if is_training:
+            if 'root_dir' not in kwargs:
+                raise ValueError("root_dir is required for training dataset")
+            samples, class_counts = self.collect_training_data(
+                kwargs['root_dir'], selected_classes, num_classes, datasize)
+        else:
+            if 'csv_path' not in kwargs:
+                raise ValueError("csv_path is required for test dataset")
+            samples, class_counts = self.collect_test_data(
+                kwargs['csv_path'],
+                kwargs.get('image_dir', ''),
+                selected_classes,
+                num_classes,
+                datasize)
+
+        if len(samples) == 0:
+            raise ValueError("No samples found")
+
+        # Perform upsampling for training data if needed
+        if is_training and up_sampling:
+            samples = self.upsample_minority_classes(samples, class_counts)
+
+        # Create dictionaries
+        image_paths = {}
+        labels = {}
+
+        # Fill dictionaries
+        for idx, (image_path, class_id) in enumerate(samples):
+            image_paths[idx] = image_path
+            if selected_classes is not None:
+                labels[idx] = MAP_ID[class_id]
             else:
-                if 'csv_path' not in kwargs:
-                    raise ValueError("csv_path is required for test dataset")
-                samples, class_counts = self.collect_test_data(
-                    kwargs['csv_path'],
-                    kwargs.get('image_dir', ''),
-                    selected_classes,
-                    num_classes,
-                    datasize)
+                labels[idx] = class_id
 
-            if len(samples) == 0:
-                raise ValueError("No samples found")
+        # Create final data structure
+        data = {
+            'image_paths': image_paths,
+            'labels': labels
+        }
 
-            # Perform upsampling for training data if needed
-            if is_training and up_sampling:
-                samples = self.upsample_minority_classes(samples, class_counts)
+        # Save to PKL file
+        with open(output_pkl_path, 'wb') as f:
+            pickle.dump(data, f)
 
-            # Create dictionaries
-            image_paths = {}
-            labels = {}
+        # Print statistics
+        print(f"\nDataset statistics for {'training' if is_training else 'test'} set:")
+        print(f"Total samples: {len(image_paths)}")
+        print("\nClass distribution:")
+        final_class_counts = Counter(labels.values())
+        for class_id, count in sorted(final_class_counts.items()):
+            print(f"Class {class_id}: {count} samples")
 
-            # Fill dictionaries
-            for idx, (image_path, class_id) in enumerate(samples):
-                image_paths[idx] = image_path
-                if selected_classes is not None:
-                    labels[idx] = MAP_ID[class_id]
-                else:
-                    labels[idx] = class_id
+        return data
 
-            # Create final data structure
-            data = {
-                'image_paths': image_paths,
-                'labels': labels
-            }
 
-            # Save to PKL file
-            with open(output_pkl_path, 'wb') as f:
-                pickle.dump(data, f)
-
-            # Print statistics
-            print(f"\nDataset statistics for {'training' if is_training else 'test'} set:")
-            print(f"Total samples: {len(image_paths)}")
-            print("\nClass distribution:")
-            final_class_counts = Counter(labels.values())
-            for class_id, count in sorted(final_class_counts.items()):
-                print(f"Class {class_id}: {count} samples")
-
-            return data
-
-        # except Exception as e:
-        #     print(f"Error occurred: {str(e)}")
-        #     return None
 
 
 if __name__ == "__main__":
@@ -248,32 +279,32 @@ if __name__ == "__main__":
     generator = DatasetPklGenerator()
 
     # Parameters
-    trainset_size = 100  # 0 for default, replace with int numbers
-    testset_size = 100  # 0 for default, replace with int numbers
+    trainset_size = 0 #10000  # 0 for default, replace with int numbers
+    testset_size = 0 #200  # 0 for default, replace with int numbers
     train_root = "/home/jamie/Works/Waterloo/ECE730/ECE730Project/Data/GTSRB/Final_Training/Images"  # Contains class folders (00000, 00001, etc.)
     test_csv = "/home/jamie/Works/Waterloo/ECE730/ECE730Project/Data/GTSRB/GT-final_test.csv"
     test_image_dir = "/home/jamie/Works/Waterloo/ECE730/ECE730Project/Data/GTSRB/Final_Test/Images"
-    selected_classes = None # Use None for all classes, or specify classes using [0,1,2,5,27]
+    selected_classes = None #[0,1,2,4,5,10,14,17,27,34] # Use None for all classes, or specify classes using [0,1,2,5,27]
     num_classes = 43  # must match with selected_classes
     if selected_classes is not None:
         MAP_ID = {}
         for i, selected_class in enumerate(selected_classes):
             MAP_ID[selected_class] = i
 
-    # # # Create training dataset
-    # train_data = generator.create_dataset_pkl(
-    #     output_pkl_path="pkls/train_dataset_43cls_uw_100.pkl",
-    #     selected_classes=selected_classes,
-    #     num_classes=num_classes,
-    #     datasize=trainset_size,
-    #     is_training=True,
-    #     up_sampling=False,
-    #     root_dir=train_root,
-    # )
+    # # Create training dataset
+    train_data = generator.create_dataset_pkl(
+        output_pkl_path="pkls/train_dataset_{}cls_{}.pkl".format(num_classes, trainset_size),
+        selected_classes=selected_classes,
+        num_classes=num_classes,
+        datasize=trainset_size,
+        is_training=True,
+        up_sampling=True,
+        root_dir=train_root,
+    )
 
     # Create test dataset
     test_data = generator.create_dataset_pkl(
-        output_pkl_path="pkls/test_dataset_43cls_uw_100.pkl",
+        output_pkl_path="pkls/test_dataset_{}cls_{}.pkl".format(num_classes, testset_size),
         selected_classes=selected_classes,
         num_classes=num_classes,
         datasize=testset_size,
