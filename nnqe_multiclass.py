@@ -1,23 +1,24 @@
+# 标准库
 import os
+import pickle
+from datetime import datetime
+from multiprocessing import Pool
+
+# 第三方库
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from tqdm import tqdm
-from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister
-from qiskit_aer import AerSimulator
-from qiskit import transpile
-import pickle
-from datetime import datetime
-
 from PIL import Image
 from sklearn.model_selection import train_test_split
-import torch
+from tqdm import tqdm
+from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister, transpile
+from qiskit_aer import AerSimulator
 
-from multiprocessing import Pool
-
+# 项目内部模块
 from tools import train_model
+
 
 
 class ImageDataset(Dataset):
@@ -71,7 +72,7 @@ def nnqe_quantum_encode(data: np.ndarray) -> np.ndarray:
     # 5. 运行电路
     backend = AerSimulator(method='statevector')
     compiled_circuit = transpile(circuit, backend, optimization_level=3)
-    job = backend.run(compiled_circuit, shots=256)  # 减少shots数量,512到256
+    job = backend.run(compiled_circuit, shots=512)  # 减少shots数量,512到256
     result = job.result()
     counts = result.get_counts(compiled_circuit)
     
@@ -96,8 +97,8 @@ def preprocess_image(image_path: str, size: tuple = (32, 32)) -> np.ndarray:
 
         features = []
         # 使用步长为2的2x2滑动窗口，确保覆盖整个32x32图像
-        for i in range(0, size[0]-1, 2):  # 改回 size[0]-1 避免边界溢出
-            for j in range(0, size[1]-1, 2):
+        for i in range(0, size[0]-1, 4):  # 改回 size[0]-1 避免边界溢出
+            for j in range(0, size[1]-1, 4):
                 # 提取2x2 patch
                 patch = image[i:i+2, j:j+2].flatten()
                 # 量子编码
@@ -105,9 +106,9 @@ def preprocess_image(image_path: str, size: tuple = (32, 32)) -> np.ndarray:
                 features.extend(quantum_features)
 
         features = np.array(features)
-        if len(features) != 1024:  # 16x16x4 = 1024
+        if len(features) != 256:  # 16x16x4 = 1024
             # 如果特征数量不对，用零填充到正确的大小
-            padded_features = np.zeros(1024)
+            padded_features = np.zeros(256)
             padded_features[:len(features)] = features
             features = padded_features
 
@@ -115,7 +116,7 @@ def preprocess_image(image_path: str, size: tuple = (32, 32)) -> np.ndarray:
 
     except Exception as e:
         print(f"Error processing image {image_path}: {str(e)}")
-        return np.zeros(1024)  # 16x16x4=1024维特征向量
+        return np.zeros(256)  # 16x16x4=1024维特征向量
 
 def preprocess_images_parallel(image_paths, num_workers=2):
     with Pool(num_workers) as pool:
@@ -132,7 +133,7 @@ class NNQECNN(nn.Module):
         super(NNQECNN, self).__init__()
         
         # 计算输入维度：16x16个窗口，每个窗口4个特征
-        self.input_size = 16 * 16 * 4  # 1024
+        self.input_size = 8 * 8 * 4  # 256
         
         # 使用简单的分类器
         self.classifier = nn.Sequential(
@@ -153,8 +154,10 @@ def main():
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.deterministic = False
     num_epochs = 80
-    num_classes = 2  # todo check before run
+    num_classes = 43  # todo check before run
     device = torch.device('cpu')
+    trainset = "pkls/train_dataset_10cls_10000.pkl"
+    testset = "pkls/test_dataset_10cls_200.pkl"
 
     # 添加预训练模型相关参数
     pretrained_path = "" # "runs/nnqe/20241123_10cls_1k/best_model.pth"  # 设置预训练模型路径
@@ -172,10 +175,10 @@ def main():
 
     # [数据加载部分保持不变...]
     print("Loading data from pickle files...")
-    with open("pkls/train_dataset_2cls_debug.pkl", 'rb') as f:  # todo check before run
+    with open(trainset, 'rb') as f:  # todo check before run
         train_data = pickle.load(f)
 
-    with open("pkls/test_dataset_2cls_debug.pkl", 'rb') as f:  # todo check before run
+    with open(testset, 'rb') as f:  # todo check before run
         test_data = pickle.load(f)
 
     # processing data
@@ -184,20 +187,45 @@ def main():
     test_paths = list(test_data['image_paths'].values())
     test_labels = list(test_data['labels'].values())
 
-    print("Encoding training data...")
-    train_features = []
-    for path in tqdm(train_paths):
-        classical_data = preprocess_image(path)
-        train_features.append(classical_data)
+    # 创建特征缓存目录
+    FEATURES_CACHE_DIR = os.path.join('pkls', 'quantum_features')
+    os.makedirs(FEATURES_CACHE_DIR, exist_ok=True)
+
+    # 生成一个唯一的特征文件名（基于数据集大小和类别数）
+    feature_cache_path = os.path.join(FEATURES_CACHE_DIR, "qfeats_{}".format(trainset.split('/')[-1]))
+    test_feature_cache_path = os.path.join(FEATURES_CACHE_DIR, "qfeats_{}".format(testset.split('/')[-1]))
+
+    # 检查是否存在缓存的特征
+    if os.path.exists(feature_cache_path) and os.path.exists(test_feature_cache_path):
+        print("Loading cached quantum features...")
+        with open(feature_cache_path, 'rb') as f:
+            train_features = pickle.load(f)
+        with open(test_feature_cache_path, 'rb') as f:
+            test_features = pickle.load(f)
+    else:
+        print("Encoding training data...")
+        train_features = []
+        for path in tqdm(train_paths):
+            quantum_data = preprocess_image(path)
+            train_features.append(quantum_data)
+        train_features = np.array(train_features)
+
+        print("Encoding test data...")
+        test_features = []
+        for path in tqdm(test_paths):
+            quantum_data = preprocess_image(path)
+            test_features.append(quantum_data)
+        test_features = np.array(test_features)
+
+        # 保存特征到缓存
+        print("Saving quantum features to cache...")
+        with open(feature_cache_path, 'wb') as f:
+            pickle.dump(train_features, f)
+        with open(test_feature_cache_path, 'wb') as f:
+            pickle.dump(test_features, f)
 
     train_features = np.array(train_features)
-
-    print("Encoding test data...")
-    test_features = []
-    for path in tqdm(test_paths):
-        classical_data = preprocess_image(path)
-        test_features.append(classical_data)
-
+    train_labels = np.array(train_labels)
     test_features = np.array(test_features)
     test_labels = np.array(test_labels)
 
@@ -234,7 +262,7 @@ def main():
             test_correct += predicted.eq(labels).sum().item()
 
     test_acc = 100.*test_correct/test_total
-    print(f'Test Accuracy: {test_acc:.2f}%')
+    print(f'\nTest Accuracy: {test_acc:.2f}%')
 
     # Save final model
     torch.save({
