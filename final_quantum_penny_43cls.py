@@ -36,7 +36,7 @@ rand_params = np.random.uniform(high=2 * np.pi, size=(n_layers, 4))
 def enhanced_circuit(inputs):
     for i in range(n_qubits):
         qml.RY(inputs[i] * np.pi, wires=i)
-        qml.RZ(inputs[i] * np.pi / 2, wires=i)
+        # qml.RZ(inputs[i] * np.pi / 2, wires=i)
     RandomLayers(rand_params, wires=list(range(n_qubits)))
     return [qml.expval(qml.PauliZ(i)) for i in range(n_qubits)]
 
