@@ -1,3 +1,27 @@
+#               precision    recall  f1-score   support
+
+#            0       0.11      1.00      0.20         5
+#            1       0.00      0.00      0.00         3
+#            2       0.00      0.00      0.00         2
+#            3       0.00      0.00      0.00         3
+#            4       0.00      0.00      0.00         7
+#            5       0.00      0.00      0.00         6
+#            6       0.00      0.00      0.00         6
+#            7       0.00      0.00      0.00         4
+#            8       0.00      0.00      0.00         6
+#            9       0.00      0.00      0.00         4
+
+#     accuracy                           0.11        46
+#    macro avg       0.01      0.10      0.02        46
+# weighted avg       0.01      0.11      0.02        46
+
+# Results:
+# Test accuracy: 0.1087
+# True labels: [9 2 0 8 0 8 1 8 6 5 9 0 4 7 9 5 6 1 9 8 4 7 8 7 5 0 6 4 4 3 8 2 5 1 0 5 6
+#  5 3 6 4 7 6 3 4 4]
+# Predicted labels: [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+#  0 0 0 0 0 0 0 0 0]
+
 import numpy as np
 from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister
 from qiskit.circuit import ParameterVector
