@@ -1,27 +1,3 @@
-#               precision    recall  f1-score   support
-
-#            0       0.11      1.00      0.20         5
-#            1       0.00      0.00      0.00         3
-#            2       0.00      0.00      0.00         2
-#            3       0.00      0.00      0.00         3
-#            4       0.00      0.00      0.00         7
-#            5       0.00      0.00      0.00         6
-#            6       0.00      0.00      0.00         6
-#            7       0.00      0.00      0.00         4
-#            8       0.00      0.00      0.00         6
-#            9       0.00      0.00      0.00         4
-
-#     accuracy                           0.11        46
-#    macro avg       0.01      0.10      0.02        46
-# weighted avg       0.01      0.11      0.02        46
-
-# Results:
-# Test accuracy: 0.1087
-# True labels: [9 2 0 8 0 8 1 8 6 5 9 0 4 7 9 5 6 1 9 8 4 7 8 7 5 0 6 4 4 3 8 2 5 1 0 5 6
-#  5 3 6 4 7 6 3 4 4]
-# Predicted labels: [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-#  0 0 0 0 0 0 0 0 0]
-
 import numpy as np
 from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister
 from qiskit.circuit import ParameterVector
@@ -37,10 +13,14 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 import pickle
+import os
 
 def preprocess_image(image_path: str, size: tuple = (32, 32)) -> np.ndarray:
-    """需要确保输出是8维特征向量"""
     try:
+        if not os.path.exists(image_path):
+            print(f"File not found: {image_path}")
+            return np.zeros(8)
+
         image = Image.open(image_path)
         image = image.resize(size)
         normalized = np.array(image) / 255.0
@@ -50,7 +30,6 @@ def preprocess_image(image_path: str, size: tuple = (32, 32)) -> np.ndarray:
         else:
             grayscale = normalized
             
-        # 提取8个特征
         h, w = grayscale.shape
         reduced = np.zeros(8)
         pool_size = h // 2
@@ -60,56 +39,24 @@ def preprocess_image(image_path: str, size: tuple = (32, 32)) -> np.ndarray:
             row_end = row_start + pool_size
             col_start = (i % 4) * pool_size
             col_end = col_start + pool_size
-            reduced[i] = np.mean(grayscale[row_start:row_end, col_start:col_end])
+            region = grayscale[row_start:row_end, col_start:col_end]
+            
+            if region.size > 0:
+                reduced[i] = np.mean(region)
+            else:
+                reduced[i] = 0.0
+                
+        if np.any(np.isnan(reduced)):
+            print(f"Warning: NaN values detected in {image_path}, replacing with zeros")
+            reduced = np.nan_to_num(reduced, 0.0)
             
         return reduced
         
     except Exception as e:
         print(f"Error processing image {image_path}: {str(e)}")
         return np.zeros(8)
-    
-def create_encoding_circuit(input_data):
-    """Create quantum circuit for encoding the input data."""
-    num_qubits = 8  # 12 -> log2(3072) ≈ 12
-    qr = QuantumRegister(num_qubits, 'q')
-    cr = ClassicalRegister(num_qubits, 'c')
-    circuit = QuantumCircuit(qr, cr)
-
-    # Apply initial Hadamard gates
-    circuit.h(qr)
-
-    # Encode amplitudes using controlled rotations
-    for i in range(min(len(input_data), 2**num_qubits)):
-        if abs(input_data[i]) > 1e-10:
-            binary = format(i, f'0{num_qubits}b')
-            
-            # Apply X gates for control qubits
-            for j, bit in enumerate(binary):
-                if bit == '1':
-                    circuit.x(qr[j])
-            
-            # Calculate rotation angle
-            angle = 2 * np.arccos(np.sqrt(abs(input_data[i]))) if input_data[i] > 0 else 0
-            
-            # Multi-controlled rotation
-            if num_qubits > 1:
-                circuit.mcry(
-                    theta=angle,
-                    q_controls=[qr[j] for j in range(num_qubits-1)],
-                    q_target=qr[-1]
-                )
-            else:
-                circuit.ry(angle, qr[0])
-            
-            # Uncompute X gates
-            for j, bit in enumerate(binary):
-                if bit == '1':
-                    circuit.x(qr[j])
-
-    return circuit
 
 def conv_circuit(params):
-    """Create a two-qubit convolutional circuit."""
     target = QuantumCircuit(2)
     target.rz(-np.pi / 2, 1)
     target.cx(1, 0)
@@ -122,12 +69,10 @@ def conv_circuit(params):
     return target
 
 def conv_layer(num_qubits, param_prefix):
-    """Create a convolutional layer."""
     qc = QuantumCircuit(num_qubits, name="Convolutional Layer")
     params = ParameterVector(param_prefix, length=num_qubits * 3)
     param_index = 0
     
-    # Apply convolutions to adjacent pairs
     for i in range(0, num_qubits - 1, 2):
         qc = qc.compose(conv_circuit(params[param_index:param_index + 3]), [i, i + 1])
         qc.barrier()
@@ -136,7 +81,6 @@ def conv_layer(num_qubits, param_prefix):
     return qc
 
 def pool_circuit(params):
-    """Create a pooling circuit."""
     target = QuantumCircuit(2)
     target.rz(-np.pi / 2, 1)
     target.cx(1, 0)
@@ -147,31 +91,21 @@ def pool_circuit(params):
     return target
 
 def pool_layer(sources, sinks, param_prefix):
-    """Create a pooling layer that operates on specific qubit pairs."""
     num_qubits = len(sources) + len(sinks)
     qc = QuantumCircuit(num_qubits, name="Pooling Layer")
-    param_index = 0
     params = ParameterVector(param_prefix, length=len(sources) * 3)
-    
+    param_index = 0
     for source, sink in zip(sources, sinks):
-        # Create subcircuit for this pair of qubits
-        qc = qc.compose(pool_circuit(params[param_index : (param_index + 3)]), [source, sink])
+        qc = qc.compose(pool_circuit(params[param_index : param_index + 3]), [source, sink])
         qc.barrier()
         param_index += 3
-
     return qc
 
 def build_qcnn_model():
-    """Build the complete QCNN model with corrected qubit handling."""
     num_qubits = 8
     
-    # Create the feature map circuit for 8 input features
     feature_map = ZFeatureMap(num_qubits)
-    
-    # Create the ansatz (QCNN layers)
     ansatz = QuantumCircuit(num_qubits, name="QCNN Ansatz")
-    
-    # Layer 1: First Convolutional Layer (8 qubits)
     ansatz.compose(conv_layer(8, "c1"), list(range(8)), inplace=True)
     
     # Layer 1: First Pooling Layer (8 -> 4 qubits)
@@ -198,7 +132,6 @@ def build_qcnn_model():
     # Define observable (measure first qubit)
     observable = SparsePauliOp.from_list([("Z" + "I" * 7, 1)])
     
-    # Create QNN
     qnn = EstimatorQNN(
         circuit=circuit.decompose(),
         observables=observable,
@@ -209,7 +142,6 @@ def build_qcnn_model():
     return qnn
 
 def create_classifier(qnn, initial_point=None):
-    """Create a quantum neural network classifier."""
     return NeuralNetworkClassifier(
         neural_network=qnn,
         optimizer=COBYLA(maxiter=200),
@@ -222,100 +154,162 @@ class QCNN:
         self.classifier = create_classifier(self.qnn)
         
     def fit(self, X, y):
-        """Train the QCNN model."""
-        # Ensure input shape matches expected dimensions
         if X.shape[1] != 8:
             raise ValueError(f"Input data must have 8 features, got {X.shape[1]}")
-        return self.classifier.fit(X, y)
+        
+        print(f"Training data shape: {X.shape}")
+        print(f"Labels distribution: {np.bincount(y)}")
+        
+        try:
+            self.classifier.fit(X, y)
+
+            train_pred = self.predict(X)
+            train_acc = np.mean(train_pred == y)
+            print(f"Training accuracy: {train_acc:.4f}")
+            
+        except Exception as e:
+            print(f"Error during training: {str(e)}")
+            raise
+        
+        return self
     
     def predict(self, X):
-        """Make predictions using the trained model."""
-        return self.classifier.predict(X)
-    
-    def score(self, X, y):
-        """Calculate the accuracy score."""
-        return self.classifier.score(X, y)
+        try:
+            raw_predictions = self.classifier.predict(X)
+            binary_predictions = (raw_predictions > 0.5).astype(int)
+            return binary_predictions
+        except Exception as e:
+            print(f"Error during prediction: {str(e)}")
+            raise
 
 class MulticlassQCNN:
     def __init__(self, num_classes):
-        """Initialize a multi-class QCNN using multiple binary classifiers."""
         self.num_classes = num_classes
         self.classifiers = [QCNN() for _ in range(num_classes)]
         
     def fit(self, X, y):
-        """Train one classifier per class using one-vs-all approach."""
+        self.training_accuracies = []
+        
         for i in range(self.num_classes):
-            # Create binary labels for current class
+            print(f"\nTraining classifier for class {i}")
             binary_y = (y == i).astype(int)
-            # Train classifier for current class
-            print(f"Training classifier for class {i}")
-            self.classifiers[i].fit(X, binary_y)
+            print(f"Class {i} samples: {np.sum(binary_y)}/{len(binary_y)}")
+            
+            try:
+                self.classifiers[i].fit(X, binary_y)
+                train_pred = self.classifiers[i].predict(X)
+                acc = np.mean(train_pred == binary_y)
+                self.training_accuracies.append(acc)
+                print(f"Classifier {i} training accuracy: {acc:.4f}")
+            except Exception as e:
+                print(f"Error training classifier {i}: {str(e)}")
+                self.training_accuracies.append(0.0)
+        
+        print("\nTraining accuracies for all classifiers:", 
+              [f"{acc:.4f}" for acc in self.training_accuracies])
         return self
     
     def predict(self, X):
-        """Predict class by taking argmax of all classifier predictions."""
-        # Get predictions from all classifiers
-        predictions = []
-        for clf in self.classifiers:
-            pred = clf.predict(X)
-            predictions.append(pred)
+        predictions = np.zeros((len(self.classifiers), len(X)))
+        confidence_scores = np.zeros((len(self.classifiers), len(X)))
+
+        for i, clf in enumerate(self.classifiers):
+            try:
+                pred = clf.predict(X)
+                predictions[i] = pred.flatten()
+                
+                raw_pred = clf.classifier.predict(X)
+                confidence_scores[i] = np.abs(raw_pred.flatten() - 0.5) * 2
+            except Exception as e:
+                print(f"Error in classifier {i}: {str(e)}")
+                predictions[i] = np.zeros(len(X))
+                confidence_scores[i] = np.zeros(len(X))
         
-        predictions = np.array(predictions)
-        # Return class with highest prediction value
-        return np.argmax(predictions, axis=0)
+        print("\nPrediction confidences:")
+        for i in range(self.num_classes):
+            print(f"Class {i} mean confidence: {np.mean(confidence_scores[i]):.4f}")
+        
+        weighted_predictions = predictions * confidence_scores
+        final_predictions = np.argmax(weighted_predictions, axis=0)
+        
+        return final_predictions
     
     def score(self, X, y):
-        """Calculate accuracy score."""
         predictions = self.predict(X)
-        return np.mean(predictions == y)
+        accuracy = np.mean(predictions == y)
+        
+        print("\nDetailed classification report:")
+        from sklearn.metrics import classification_report
+        print(classification_report(y, predictions))
+        
+        print("\nConfusion Matrix:")
+        from sklearn.metrics import confusion_matrix
+        cm = confusion_matrix(y, predictions)
+        print(cm)
+        
+        return accuracy
 
-# Main execution code remains the same
+def create_classifier(qnn, initial_point=None):
+    return NeuralNetworkClassifier(
+        neural_network=qnn,
+        optimizer=COBYLA(maxiter=500),
+        callback=lambda weights, obj_func_eval: print(f"Current objective value: {obj_func_eval:.4f}"),
+        initial_point=initial_point
+    )
+
 if __name__ == "__main__":
-    # Load a small dataset for testing
     print("Loading dataset...")
 
-    # load MNIST dataset
-    # digits = load_digits()
-    # X = digits.data[:100]  # Take only first 100 samples for testing
-    # y = digits.target[:100]
+    try:
+        with open("pkls/train_dataset_43cls_1000.pkl", 'rb') as f:
+            train_data = pickle.load(f)
+        with open("pkls/test_dataset_43cls_200.pkl", 'rb') as f:
+            test_data = pickle.load(f)
+    except Exception as e:
+        print(f"Error loading dataset: {str(e)}")
+        exit(1)
 
-    # load GTRSB dataset
-    with open("pkls/train_dataset_1k.pkl", 'rb') as f:
-        train_data = pickle.load(f)
-    with open("pkls/test_dataset_100.pkl", 'rb') as f:
-        test_data = pickle.load(f)
-
-    # 选择10个类别的数据
-    selected_classes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 可以选择任意10个类别
+    selected_classes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     
-    # 过滤数据
     train_paths = []
     train_labels = []
     for idx, label in train_data['labels'].items():
         if label in selected_classes:
             train_paths.append(train_data['image_paths'][idx])
-            # 重新映射标签到0-9
             new_label = selected_classes.index(label)
             train_labels.append(new_label)
             
-    # 转换为numpy数组
-    X = np.array([preprocess_image(path) for path in train_paths])
-    y = np.array(train_labels)
+    print("Processing images...")
+    X = []
+    valid_indices = []
+    for i, path in enumerate(train_paths):
+        features = preprocess_image(path)
+        if not np.any(np.isnan(features)):
+            X.append(features)
+            valid_indices.append(i)
+        if (i + 1) % 50 == 0:
+            print(f"Processed {i + 1}/{len(train_paths)} images")
+    
+    X = np.array(X)
+    y = np.array([train_labels[i] for i in valid_indices])
     
     print("Data loaded. Shape:", X.shape)
     print("Number of classes:", len(np.unique(y)))
     print("Classes present:", np.unique(y))
     
-    # Reduce dimensionality to 8 features using PCA
+    print("Performing standardization and PCA...")
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
+    
+    if np.any(np.isnan(X_scaled)):
+        print("Warning: NaN values found after scaling, replacing with zeros")
+        X_scaled = np.nan_to_num(X_scaled, 0.0)
     
     pca = PCA(n_components=8)
     X_reduced = pca.fit_transform(X_scaled)
     
     print("Data reduced to 8 features. Shape:", X_reduced.shape)
     
-    # Split the data
     X_train, X_test, y_train, y_test = train_test_split(
         X_reduced, y, test_size=0.2, random_state=42
     )
@@ -323,14 +317,12 @@ if __name__ == "__main__":
     print("Training data shape:", X_train.shape)
     print("Test data shape:", X_test.shape)
     
-    # Create and train multi-class model
     print("\nCreating multi-class QCNN model...")
-    model = MulticlassQCNN(num_classes=10)  # 10 classes for MNIST
+    model = MulticlassQCNN(num_classes=10)
     
     print("\nTraining model...")
     model.fit(X_train, y_train)
     
-    # Make predictions
     print("\nMaking predictions...")
     predictions = model.predict(X_test)
     accuracy = model.score(X_test, y_test)
